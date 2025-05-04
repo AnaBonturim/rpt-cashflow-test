@@ -7,7 +7,12 @@ import psycopg2
 
 from numbers import Number
 import io
-from aspose.cells import Workbook, Worksheet, Cells, CellValueType , Range, Cell, CellsException
+from aspose.cells import Workbook, Worksheet, Cells, CellValueType , Range, Cell, CellsException, CellsHelper
+
+import sys
+sys.path.append(r"C:\Users\abont\Projects\rpt-cashflow-test\python\src\util")
+
+from Util import Util
 
 class RptAbstract(ABC):
     
@@ -25,11 +30,15 @@ class RptAbstract(ABC):
     @abstractmethod
     def get_sheet_name(self):
         pass
-
-    def execute(self, cd_cenario, agrupamento_list):
+    
+    @abstractmethod
+    def freeze_pane(self, context, worksheet):
+        pass
+    
+    def execute(self, dados):
         
         print("Execute.")
-        context = self.init(cd_cenario, agrupamento_list)
+        context = self.init(dados)
         
         workbook = self.gerar_workbook(context)
         
@@ -39,14 +48,14 @@ class RptAbstract(ABC):
         self.wrapup_workbook(context, workbook)
         self.salvar_excel(context, workbook)
         
-    def init(self, cd_cenario, agrupamento_list):
+    def init(self, dados):
         
         cursor = self.create_cursor()
-        info = self.create_info(cursor, cd_cenario)
+        info = self.create_info(cursor, dados.cd_cenario)
         
-        context = self.Context(cursor, info)
+        context = self.Context(cursor, info, dados.cd_considerar_standby)
         
-        self.populate_agrupamento(context, agrupamento_list)
+        self.populate_agrupamento(context, dados.agrupamento_list)
         self.populate_tipo_grupo_servico(context)
         
         return context
@@ -223,6 +232,7 @@ class RptAbstract(ABC):
     
     def gerar_node_root(self, context):
         self.populate_valores(context)
+        context.fill_crosstab_node_range()
     
     def gerar_planilha(self, context, workbook):
         
@@ -242,6 +252,9 @@ class RptAbstract(ABC):
         sorted_crosstabs = sorted(context.crosstabs.values(), key=lambda crosstab: crosstab.get_key_to_display())
         
         self.gerar_cabecalho_planilha(context, workbook)
+        
+        crosstab_tipo = self.get_range(workbook, "Crosstab_tipo")
+        row_crosstab_tipo = crosstab_tipo.first_row if crosstab_tipo else -1
         
         range_crosstab_rotulos = self.get_range(workbook, "Crosstab_Rotulos", True)
         crosstab_titulo = self.get_range(workbook, "Crosstab_titulo", True)
@@ -263,6 +276,9 @@ class RptAbstract(ABC):
             cell = cells.get(row_crosstab_titulo, col_crosstab)
             cell.value = crosstab.get_display()
             crosstab.apply_style(cell)
+            
+            if crosstab_tipo:
+                self.excel_value(cells, row_crosstab_tipo, col_crosstab, context.crosstab_generator.get_type())
 
         self.hide_column(workbook, cells, "Filtro_GrupoServico")
         self.hide_column(workbook, cells, "Filtro_TipoGrupoServico")
@@ -285,12 +301,17 @@ class RptAbstract(ABC):
             self.gerar_node(context.root, context, workbook, cells, col_crosstab_first, sorted_crosstabs,
                             range_crosstab_rotulos, range_node_key, range_node_descr, range_total, 1, qt_cols_crosstab)
 
-        # TODO
-        # workbook.worksheets.remove_by_index(context.index_sheet_cashflow)
+        workbook.worksheets.remove_by_index(context.index_sheet_cashflow)
 
         print("Recalculando as formulas.")
 
         workbook.calculate_formula()
+        
+        for index in range(0, len(workbook.worksheets)):
+            sheet = workbook.worksheets[index]
+            
+            if index >= sheet.index:
+                self.freeze_pane(context, sheet)
     
     def hide_column(self, workbook, cells, nm_range):
         range_col = self.get_range(workbook, nm_range)
@@ -347,13 +368,13 @@ class RptAbstract(ABC):
                     range_crosstab_rotulos, range_node_key, range_node_descr, range_total,
                     level, qt_cols_crosstab)
 
-        children_values = node.get_children_values()
+        children_values = list(node.get_children_values())
         if children_values:
-            generator = context.get_node_data_generator(node.children_values[0].node_type)
+            generator = context.get_node_data_generator(children_values[0].node_type)
             sorted_children = generator.sort(children_values)
 
             for child in sorted_children:
-                self.gerarNode(child, context, workbook, cells, col_crosstab_first, sorted_crosstabs,
+                self.gerar_node(child, context, workbook, cells, col_crosstab_first, sorted_crosstabs,
                         range_crosstab_rotulos, range_node_key, range_node_descr, range_total,
                         level + 1, qt_cols_crosstab)
 
@@ -454,6 +475,10 @@ class RptAbstract(ABC):
         
         return range
     
+    def excel_value(self, cells, row, col, value):
+        if col != -1 and row != -1:
+            cells.get(row, col).value = value
+    
     def parse_integer_list(self, text):
         
         list = []
@@ -520,6 +545,7 @@ class RptAbstract(ABC):
             
             if child is None:
                 child = RptAbstract.Node(generator.get_data(key), generator.get_type())
+                self.children[key] = child
             
             return child   
             
@@ -584,6 +610,12 @@ class RptAbstract(ABC):
         def get_sorted_children(self):
             return self.children.values().sort(key=lambda cn: cn.data.get_key_to_display())
     
+    class FillNodeRange(ABC):
+        
+        @abstractmethod
+        def get_keys():
+            pass
+    
     class NodeDataGenerator(ABC):
         
         @abstractmethod
@@ -607,7 +639,7 @@ class RptAbstract(ABC):
             pass
     
         def sort(self, collection):
-            collection.sort(key=lambda n: n.data.get_key())
+            return sorted(collection, key=lambda n: n.data.get_key())
     
     class NodeData(ABC):
         
@@ -710,7 +742,7 @@ class RptAbstract(ABC):
                 vo = RptAbstract.EmpreendNodeData(row[0], row[1])
                 self.map[vo.get_key()] = vo
 
-            print(f"Adicionado {len(self.map)} empreendimentos no Generator")
+            # print(f"Adicionado {len(self.map)} empreendimentos no Generator")
             
         def get_descr(self):
             return "Empreendimentos"
@@ -734,7 +766,25 @@ class RptAbstract(ABC):
         
         def convert_key(self, key):
             return key
+
+    class PeriodoIterator:
+        def __init__(self, cd_ano_mes_min, cd_ano_mes_max):
+            self.cd_ano_mes_min = cd_ano_mes_min
+            self.cd_ano_mes_max = cd_ano_mes_max
+            
+            self.cd_ano_mes_next = self.cd_ano_mes_min
+            
+        def __iter__(self):
+            return self
         
+        def __next__(self):
+            if self.cd_ano_mes_next > self.cd_ano_mes_max:
+                raise StopIteration
+            
+            value = self.cd_ano_mes_next
+            self.cd_ano_mes_next = Util.add_index_to_periodo(self.cd_ano_mes_next, 1)
+            
+            return value
         
     class PeriodoNodeData(NodeData):
         
@@ -746,10 +796,10 @@ class RptAbstract(ABC):
             return self.cd_ano_mes
         
         def get_descr(self):
-            return self.dt_periodo
+            return self.dt_periodo.strftime("%b/%Y")
         
         def get_display(self):
-            return self.dt_periodo.strftime("%b/%Y")
+            return self.dt_periodo
         
         def get_key_to_display(self):
             return self.cd_ano_mes
@@ -760,11 +810,15 @@ class RptAbstract(ABC):
             cell.set_style(style) 
             
     
-    class PeriodoGenerator(NodeDataGenerator):
+    class PeriodoGenerator(NodeDataGenerator, FillNodeRange):
         
         def __init__(self, context):
             self.map = {}
+            self.cd_ano_mes_min = None
+            self.cd_ano_mes_max = None
             
+        def get_keys(self):
+            return RptAbstract.PeriodoIterator(self.cd_ano_mes_min, self.cd_ano_mes_max)
             
         def get_descr(self):
             return "Períodos"
@@ -783,6 +837,8 @@ class RptAbstract(ABC):
                 
                 data = RptAbstract.PeriodoNodeData(key, date(ano, mes, 1))
                 self.map[key] = data
+                
+                self.atualiza_periodo(key)
             
             return data
         
@@ -790,13 +846,25 @@ class RptAbstract(ABC):
             return "a.cd_ano_mes"
         
         def convert_key(self, key):
+            cd_ano_mes = 0
+            
             if isinstance(key, Number):
-                return int(key)
+                cd_ano_mes = int(key)
             
             if isinstance(key, str) and key.isnumeric():
-                return int(key)
+                cd_ano_mes = int(key)
             
-            return key
+            self.atualiza_periodo(cd_ano_mes)
+            
+            return cd_ano_mes
+        
+        def atualiza_periodo(self, cd_ano_mes):
+            if cd_ano_mes:
+                if self.cd_ano_mes_min is None or cd_ano_mes < self.cd_ano_mes_min:
+                    self.cd_ano_mes_min = cd_ano_mes
+                
+                if self.cd_ano_mes_max is None or cd_ano_mes > self.cd_ano_mes_max:
+                    self.cd_ano_mes_max = cd_ano_mes
     
     
     class Info:
@@ -809,7 +877,7 @@ class RptAbstract(ABC):
             
     class Context:
         
-        def __init__(self, cursor, info):
+        def __init__(self, cursor, info, cd_considerar_standby):
             self.cursor = cursor
             self.info = info
             self.node_data_generator_list = []
@@ -823,6 +891,7 @@ class RptAbstract(ABC):
             self.running_col = 0
             self.col_node_descr = -1
             self.col_node_key = -1
+            self.cd_considerar_standby = cd_considerar_standby
             
         def add_item(self, item):
             if item:
@@ -836,7 +905,7 @@ class RptAbstract(ABC):
             node_data_generator = None
             type = name.upper()
             
-            print(f"Buscando o generator para {type}")
+            # print(f"Buscando o generator para {type}")
             
             if not self.node_data_generator_map or type not in self.node_data_generator_map:
                 
@@ -847,7 +916,11 @@ class RptAbstract(ABC):
                 else:
                     raise Exception(f"Tipo {type} não encontrado!")
                 
-            self.node_data_generator_map[type] = node_data_generator
+                self.node_data_generator_map[type] = node_data_generator
+                
+            node_data_generator = self.node_data_generator_map[type]
+            
+            # print(f"Buscado o generator {node_data_generator}")
                 
             return node_data_generator
         
@@ -871,3 +944,8 @@ class RptAbstract(ABC):
                 return agrupamentos[2:]
             else:
                 return "TOTAL"
+            
+        def fill_crosstab_node_range(self):
+            if self.crosstab_generator and isinstance(self.crosstab_generator, RptAbstract.FillNodeRange):
+                for key in self.crosstab_generator.get_keys():
+                    self.get_crosstab(key)

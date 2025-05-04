@@ -1,5 +1,7 @@
 from RptAbstract import RptAbstract
 
+from aspose.cells import Workbook, Worksheet, CellsHelper
+
 class RptCashflow(RptAbstract):
     
     GS_NAO_USADO_EXCECAO_LIST = [372, 331, 792]
@@ -15,6 +17,13 @@ class RptCashflow(RptAbstract):
     
     def get_sheet_name(self):
         return "Cashflow Mensal"
+    
+    def freeze_pane(self, context, worksheet):
+        
+        col = CellsHelper.column_name_to_index("L")
+        row = CellsHelper.row_name_to_index("9")
+        
+        worksheet.freeze_panes(row, col, row, col)
     
     def populate_valores(self, context):
         
@@ -42,6 +51,22 @@ class RptCashflow(RptAbstract):
         
         if group_by:
             group_by = ', ' + group_by
+            
+        filter_considerar_standby = ""
+        considerar_standby_parcialmente = False
+
+        if context.cd_considerar_standby == 1:
+            # Considerar parcialmente
+            considerar_standby_parcialmente = True
+        elif context.cd_considerar_standby == 2:
+            filter_considerar_standby = f"""
+                AND estudo.cd_status NOT IN ({', '.join(RptCashflow.STATUS_STANDBY)})
+            """
+
+        grupo_servico_considerar_standby_map = {}
+        if considerar_standby_parcialmente:
+            dez_ano = int(context.info.cd_ano_mes_previsao / 100) * 100 + 12
+            self.load_grupo_servico_considerar_standby(context, grupo_servico_considerar_standby_map, dez_ano)
         
         cd_cenario = context.info.cd_cenario
         cursor = context.cursor
@@ -86,6 +111,7 @@ class RptCashflow(RptAbstract):
                 ON estudo.id_estudo_edit_original = estudo_original.id_estudo
             WHERE b.cdCenario = {cd_cenario}
             AND a.fl_rateado = 0
+            {filter_considerar_standby}
         """
         
         cursor.execute(select)
@@ -133,6 +159,19 @@ class RptCashflow(RptAbstract):
             if vl_sinal_fluxo != 0:
                 vl_evento *= vl_sinal_fluxo
                 
+            if considerar_standby_parcialmente and cd_ano_mes >= context.info.cd_ano_mes_previsao and cd_status in RptCashflow.STATUS_STANDBY:
+                grupo_servico_considerar_standby = grupo_servico_considerar_standby_map.get(cd_grupo_servico, None)
+                
+                if grupo_servico_considerar_standby:
+                    if grupo_servico_considerar_standby.cd_empreend_incluir_list:
+                        if cd_empreend not in grupo_servico_considerar_standby.cd_empreend_incluir_list:
+                            continue
+                    
+                    if cd_ano_mes > grupo_servico_considerar_standby.am_projecoes_ate:
+                        continue
+                else:
+                    continue
+                
             if cd_ano_mes >= context.info.cd_ano_mes_previsao:
                 if cd_empreend not in ['00005'] and cd_tipo_evento != RptCashflow.CD_TIPO_EVENTO_SCRIPT and cd_connector != RptCashflow.CONNECTOR_PROJECOES:
                     if cd_grupo_servico in RptCashflow.GS_IGNORAR_CUSTO_FORA_MATRIZ or cd_tipo_grupo_servico in RptCashflow.TGS_IGNORAR_CUSTO_FORA_MATRIZ:
@@ -158,12 +197,63 @@ class RptCashflow(RptAbstract):
                 
                 if not crosstab:
                     crosstab = context.get_crosstab(crosstab_key)                
+
+                self.acumular(context, context.root, crosstab, valor, item)
                 
                 node = context.root    
-                
-                self.acumular(context, node, crosstab, valor, item)
-                
                 for index in range(0, len(keys)):
                     node = node.get_child(keys[index], context.node_data_generator_list[index])
                     self.acumular(context, node, crosstab, valor, item)
+
+    def load_grupo_servico_considerar_standby(self, context, grupo_servico_considerar_standby_map, dez_ano):
         
+        cursor = context.cursor
+        
+        select = """
+            SELECT
+                a.cd_grupo_servico,
+                a.fl_toda_projecao,
+                a.cd_empreend_incluir
+            FROM tb_gs_projeto_standby a
+        """
+        
+        cursor.execute(select)
+        
+        result = cursor.fetchall()
+        
+        for row in result:
+            col = -1
+            
+            cd_grupo_servico = int(row[col := 1 + col])
+            toda_projecao = row[col := 1 + col] != 0
+            cd_empreend_incluir_list = []
+
+            empreend_incluir = row[col := 1 + col]
+            
+            if empreend_incluir:
+                empreend_incluir = list(empreend_incluir)
+                for cd_empreend in empreend_incluir:
+                    cd_empreend_incluir_list.append(cd_empreend)
+
+            grupo_servico_considerar_standby = RptCashflow.GrupoServicoConsiderarStandby(cd_grupo_servico)
+            if cd_empreend_incluir_list:
+                grupo_servico_considerar_standby.cd_empreend_incluir_list = cd_empreend_incluir_list
+
+            if not toda_projecao:
+                # grupo_servico_considerar_standby.am_projecoes_ate = dez_ano
+                # desconsiderando projeções do ano. alteração pedida pela Jaqueline em 27/03/2025
+                grupo_servico_considerar_standby.am_projecoes_ate = 0
+
+            grupo_servico_considerar_standby_map[cd_grupo_servico] = grupo_servico_considerar_standby
+
+        # coloca também os aportes/saques
+        grupo_servico_considerar_standby_map[710] = RptCashflow.GrupoServicoConsiderarStandby(710)
+        grupo_servico_considerar_standby_map[872] = RptCashflow.GrupoServicoConsiderarStandby(872)
+        
+        
+    class GrupoServicoConsiderarStandby:
+        
+        def __init__(self, cd_grupo_servico, am_projecoes_ate=999912):
+            self.cd_grupo_servico = cd_grupo_servico
+            self.am_projecoes_ate = am_projecoes_ate
+            self.cd_empreend_incluir_list = []
