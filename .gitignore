@@ -1,3 +1,4 @@
 .env
-output/*
+groovy/output/*
+python/output/*
 groovy/bin/*

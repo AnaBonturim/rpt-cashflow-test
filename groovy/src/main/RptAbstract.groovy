@@ -540,12 +540,7 @@ abstract class RptAbstract
     {
         context.log('Exportando.')
 
-        // def fileOut = new ByteArrayOutputStream("Cashflow.xlsx")
-
-        workbook.setAbsolutePath('C:\\Users\\abont\\Projects\\rpt-cashflow-test\\groovy\\output')
-        workbook.save("Cashflow.xlsx", getFileFormatType())
-
-        // fileOut.close()
+        workbook.save('C:\\Users\\abont\\Projects\\rpt-cashflow-test\\groovy\\output\\Cashflow.xlsx', getFileFormatType())
     }
 
     void buildIndice(Context context, Workbook workbook)
