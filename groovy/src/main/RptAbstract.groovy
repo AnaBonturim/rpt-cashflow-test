@@ -67,7 +67,7 @@ abstract class RptAbstract
         context.logger = new LogUtil()
 
         context.mensal = true
-        context.formatoTabular = false
+        context.formatoTabular = dados.formatoTabular
         context.abrirItens = false
         context.drilldown = true
         context.contrapartida = true
@@ -519,6 +519,11 @@ abstract class RptAbstract
             if (dataGenerator && context.rcDsGroup[1] != -1)
                 excelValue cells, context.rcDsGroup[0], context.rcDsGroup[1], "Descr. ${dataGenerator.descr}"
         }
+
+        println("Quantidade de colunas: ${qtFormatoTabular}")
+        println("index código: ${indexCdFormatoTabular}")
+        println("index descr: ${indexDsFormatoTabular}")
+        println("Primeira coluna: ${firstColFormatoTabular}")
 
         context.qtFormatoTabular = qtFormatoTabular
         context.indexCdFormatoTabular = indexCdFormatoTabular

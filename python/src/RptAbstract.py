@@ -16,6 +16,7 @@ from Util import Util
 
 class RptAbstract(ABC):
     
+    GENERATOR_TYPE_REGIONAL = "REGIONAL"
     GENERATOR_TYPE_EMPREEND = "EMPREEND"
     GENERATOR_TYPE_PERIODO = "PERIODO"
     
@@ -54,6 +55,10 @@ class RptAbstract(ABC):
         info = self.create_info(cursor, dados.cd_cenario)
         
         context = self.Context(cursor, info, dados.cd_considerar_standby)
+        context.formato_tabular = dados.formato_tabular
+        
+        if (context.formato_tabular):
+            context.drilldown = True
         
         self.populate_agrupamento(context, dados.agrupamento_list)
         self.populate_tipo_grupo_servico(context)
@@ -154,6 +159,7 @@ class RptAbstract(ABC):
         
         cells = worksheet.cells
         
+        self.check_formato_tabular(context, workbook, cells)
         self.populate_parametros(context, workbook, worksheet, cells)
         
         return workbook
@@ -176,6 +182,91 @@ class RptAbstract(ABC):
         byte_array_xlsx = result[0]
         
         return Workbook(io.BytesIO(byte_array_xlsx))   
+    
+    def check_formato_tabular(self, context, workbook, cells):
+        
+        if not context.formato_tabular:
+            return
+        
+        context.rc_cd_group = self.get_row_col_range(workbook, "CDGROUP")
+        
+        if not self.rc_exists(context.rc_cd_group):
+            return
+        
+        col = context.rc_cd_group[1] + 1
+        row = context.rc_cd_group[0]
+        cells.insert_columns(col, 1)
+        context.rc_ds_group = [row, col]
+    
+        self.prepare_formato_tabular(context, cells)
+
+        range_node_descr = self.get_range(workbook, "Node_Descr")
+        cells.delete_rows(range_node_descr.first_row, 1, True)
+    
+    def prepare_formato_tabular(self, context, cells):
+        
+        if not context.formato_tabular:
+            return
+        
+        print(f"Preparando formato tabular.")
+        
+        qt_formato_tabular = 0
+        
+        if self.rc_exists(context.rc_cd_group):
+            qt_formato_tabular += 1
+            
+        if self.rc_exists(context.rc_ds_group):
+            qt_formato_tabular += 1
+        
+        index_cd_formato_tabular = 1 if context.rc_cd_group[1] > context.rc_ds_group[1] and self.rc_exists(context.rc_ds_group) else 0
+        index_ds_formato_tabular = 1 if context.rc_ds_group[1] > context.rc_cd_group[1] and self.rc_exists(context.rc_cd_group) else 0
+        first_col_formato_tabular = max(context.rc_cd_group[1], context.rc_ds_group[1]) - (qt_formato_tabular - 1)
+
+        qt_keys = len(context.node_data_generator_list) - 1
+        
+        if qt_formato_tabular > 0 and qt_keys > 0:
+            qt_cols_formato_tabular = qt_formato_tabular * qt_keys
+            
+            second_col_formato_tabular = first_col_formato_tabular + qt_formato_tabular
+            row_cabecalho = max(context.rc_cd_group[0], context.rc_ds_group[0])
+            
+            cells.insert_columns(second_col_formato_tabular, qt_cols_formato_tabular, True)
+
+            range_from = cells.create_range(row_cabecalho, first_col_formato_tabular, 10, qt_formato_tabular)
+
+            for index in range(0, qt_keys):
+                col = second_col_formato_tabular + index * qt_formato_tabular
+                range_to = cells.create_range(row_cabecalho, col, 10, qt_formato_tabular)
+                range_to.copy(range_from)
+            
+            for index in range(0, qt_keys + 1):
+                generator = context.node_data_generator_list[index]
+                col = first_col_formato_tabular + index * qt_formato_tabular
+                
+                if self.rc_exists(context.rc_cd_group):
+                    self.excel_value(cells, context.rc_cd_group[0], col + index_cd_formato_tabular, f"Cód. {generator.get_descr()}")
+                
+                if self.rc_exists(context.rc_ds_group):
+                    self.excel_value(cells, context.rc_ds_group[0], col + index_ds_formato_tabular, f"Descr. {generator.get_descr()}")
+                    
+        elif qt_keys == 0:
+            generator = context.node_data_generator_list[0]
+            
+            if context.rc_cd_group[1] != -1:
+                self.excel_value(cells, context.rc_cd_group[0], context.rc_cd_group[1], f"Cód. {generator.get_descr()}")
+
+            if context.rc_ds_group[1] != -1:
+                self.excel_value(cells, context.rc_ds_group[0], context.rc_ds_group[1], f"Descr. {generator.get_descr()}")
+
+        print(f"Quantidade de colunas: {qt_formato_tabular}")
+        print(f"index código: {index_cd_formato_tabular}")
+        print(f"index descr: {index_ds_formato_tabular}")
+        print(f"Primeira coluna: {first_col_formato_tabular}")
+        
+        context.qt_formato_tabular = qt_formato_tabular
+        context.index_cd_formato_tabular = index_cd_formato_tabular
+        context.index_ds_formato_tabular = index_ds_formato_tabular
+        context.first_col_formato_tabular = first_col_formato_tabular
     
     def populate_parametros(self, context, workbook, worksheet, cells):
         
@@ -252,6 +343,10 @@ class RptAbstract(ABC):
         sorted_crosstabs = sorted(context.crosstabs.values(), key=lambda crosstab: crosstab.get_key_to_display())
         
         self.gerar_cabecalho_planilha(context, workbook)
+        
+        if context.formato_tabular:
+            cells.ungroup_rows(0, cells.max_row, True)
+            cells.unhide_rows(0, cells.max_row, 17.25)
         
         crosstab_tipo = self.get_range(workbook, "Crosstab_tipo")
         row_crosstab_tipo = crosstab_tipo.first_row if crosstab_tipo else -1
@@ -348,7 +443,7 @@ class RptAbstract(ABC):
         
         new_sheet = False
         
-        if node.node_type == 'TOTAL':
+        if node.node_type == 'TOTAL' or (not context.formato_tabular and not context.drilldown and level == 2):
             new_sheet = True
         
         if new_sheet:
@@ -356,7 +451,7 @@ class RptAbstract(ABC):
             
             try:
                 worksheet.name = self.build_sheet_name(node.data.get_descr()) 
-            except CellsException as e:
+            except Exception as e:
                 print(f"ERRO: Erro ao mudar o nome da planilha para {node.data.get_descr()}: {e}")
                 worksheet.name = self.build_sheet_name(node.data.get_key()) 
 
@@ -364,9 +459,10 @@ class RptAbstract(ABC):
 
             context.running_row = range_crosstab_rotulos.first_row + range_crosstab_rotulos.row_count
 
-        self.formatar_node(node, context, workbook, cells, col_crosstab_first, sorted_crosstabs,
-                    range_crosstab_rotulos, range_node_key, range_node_descr, range_total,
-                    level, qt_cols_crosstab)
+        if not context.formato_tabular or (context.formato_tabular and not node.children):
+            self.formatar_node(node, context, workbook, cells, col_crosstab_first, sorted_crosstabs,
+                        range_crosstab_rotulos, range_node_key, range_node_descr, range_total,
+                        level, qt_cols_crosstab)
 
         children_values = list(node.get_children_values())
         if children_values:
@@ -382,6 +478,8 @@ class RptAbstract(ABC):
             cells.delete_rows(range_crosstab_rotulos.first_row, range_crosstab_rotulos.row_count)
     
     def build_sheet_name(self, name):
+        
+        name = str(name)
         
         if not name:
             return "Sheet"
@@ -401,6 +499,9 @@ class RptAbstract(ABC):
         cells.insert_rows(context.running_row, range_crosstab_rotulos.row_count)
         cells.copy_rows(cells, range_crosstab_rotulos.first_row, context.running_row, range_crosstab_rotulos.row_count)
 
+        for index in range(0, range_crosstab_rotulos.row_count):
+            self.populate_formato_tabular(context, node, cells, index)
+        
         if range_node_key:
             index_node_key = range_node_key.first_row - range_crosstab_rotulos.first_row
             cells.get(context.running_row + index_node_key, range_node_key.first_column).value = node.data.get_key_to_display()
@@ -421,6 +522,26 @@ class RptAbstract(ABC):
                                context.running_row + index, index, col_crosstab_first, qt_cols_crosstab)
 
         context.running_row += range_crosstab_rotulos.row_count
+    
+    def populate_formato_tabular(self, context, node, cells, index):
+        
+        if not context.formato_tabular:
+            return
+        
+        tab_index = len(context.node_data_generator_list) - 1
+        c_node = node
+        
+        while c_node.parent:
+            col = context.first_col_formato_tabular + tab_index * context.qt_formato_tabular
+            
+            if self.rc_exists(context.rc_cd_group):
+                self.excel_value(cells, context.running_row + index, col + context.index_cd_formato_tabular, c_node.data.get_key_to_display())
+            
+            if self.rc_exists(context.rc_ds_group):
+                self.excel_value(cells, context.running_row + index, col + context.index_ds_formato_tabular, c_node.data.get_descr())
+            
+            tab_index -= 1
+            c_node = c_node.parent
     
     def populate_rows(self, context, node, cells, sorted_crosstabs, range_total, 
                                row, index, col_crosstab_first, qt_cols_crosstab):
@@ -478,6 +599,33 @@ class RptAbstract(ABC):
     def excel_value(self, cells, row, col, value):
         if col != -1 and row != -1:
             cells.get(row, col).value = value
+            
+    def rc_exists(self, rc):
+        return rc and rc[0] != -1 and rc[1] != -1
+    
+    def get_row_col_range(self, workbook, name):
+        range = self.get_range(workbook, name, False)
+        
+        if range:
+            return [range.first_row, range.first_column]
+        
+        return [-1, -1]
+    
+    def get_col_range(self, workbook, name):
+        range = self.get_range(workbook, name, False)
+        
+        if range:
+            return range.first_column
+        
+        return -1
+
+    def get_row_range(self, workbook, name):
+        range = self.get_range(workbook, name, False)
+        
+        if range:
+            return range.first_row
+        
+        return -1
     
     def parse_integer_list(self, text):
         
@@ -546,6 +694,7 @@ class RptAbstract(ABC):
             if child is None:
                 child = RptAbstract.Node(generator.get_data(key), generator.get_type())
                 self.children[key] = child
+                child.parent = self
             
             return child   
             
@@ -766,6 +915,87 @@ class RptAbstract(ABC):
         
         def convert_key(self, key):
             return key
+        
+    class RegionalNodeData(NodeData):
+        
+        def __init__(self, cd_regional, ds_regional):
+            self.cd_regional = cd_regional
+            self.ds_regional = ds_regional
+        
+        def get_key(self):
+            return self.cd_regional
+        
+        def get_descr(self):
+            return self.ds_regional
+        
+        def get_display(self):
+            return self.ds_regional
+        
+        def get_key_to_display(self):
+            return self.cd_regional
+        
+        def apply_style(self, cell):
+            pass
+            
+    
+    class RegionalGenerator(NodeDataGenerator):
+        
+        def __init__(self, context):
+            self.map = {}
+            
+            self.populate(context)
+            
+        def populate(self, context):
+            
+            cursor = context.cursor
+            
+            print(f"Buscando regionais.")
+            
+            select = """
+                SELECT
+                    a.cdRegional,
+                    a.dsRegional
+                FROM tb_regional a
+            """
+            
+            cursor.execute(select)
+            
+            result = cursor.fetchall()
+            
+            for row in result:
+                vo = RptAbstract.RegionalNodeData(row[0], row[1])
+                self.map[vo.get_key()] = vo
+
+            # print(f"Adicionado {len(self.map)} regionais no Generator")
+            
+        def get_descr(self):
+            return "Regionais"
+        
+        def get_type(self):
+            return RptAbstract.GENERATOR_TYPE_REGIONAL
+        
+        def get_data(self, key):
+            
+            data = self.map.get(key, None)
+            
+            if data is None:
+                
+                data = RptAbstract.RegionalNodeData(key, key)
+                self.map[key] = data
+            
+            return data
+        
+        def get_group_by(self):
+            return "b.cdRegional"
+        
+        def convert_key(self, key):
+            if isinstance(key, Number):
+                return int(key)
+            
+            if isinstance(key, str) and key.isnumeric():
+                return int(key)
+            
+            return 0
 
     class PeriodoIterator:
         def __init__(self, cd_ano_mes_min, cd_ano_mes_max):
@@ -892,6 +1122,14 @@ class RptAbstract(ABC):
             self.col_node_descr = -1
             self.col_node_key = -1
             self.cd_considerar_standby = cd_considerar_standby
+            self.formato_tabular = False
+            self.drilldown = True
+            self.rc_cd_group = None
+            self.rc_ds_group = None
+            self.qt_formato_tabular = None
+            self.index_cd_formato_tabular = None
+            self.index_ds_formato_tabular = None
+            self.first_col_formato_tabular = None
             
         def add_item(self, item):
             if item:
@@ -911,6 +1149,8 @@ class RptAbstract(ABC):
                 
                 if type == RptAbstract.GENERATOR_TYPE_EMPREEND:
                     node_data_generator = RptAbstract.EmpreendGenerator(self)
+                elif type == RptAbstract.GENERATOR_TYPE_REGIONAL:
+                    node_data_generator = RptAbstract.RegionalGenerator(self)
                 elif type == RptAbstract.GENERATOR_TYPE_PERIODO:
                     node_data_generator = RptAbstract.PeriodoGenerator(self)
                 else:

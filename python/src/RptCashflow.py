@@ -50,7 +50,7 @@ class RptCashflow(RptAbstract):
         group_by = ', '.join(group_by_list)
         
         if group_by:
-            group_by = ', ' + group_by
+            group_by = group_by + ', '
             
         filter_considerar_standby = ""
         considerar_standby_parcialmente = False
@@ -73,6 +73,7 @@ class RptCashflow(RptAbstract):
         
         select = f"""
             SELECT
+                {group_by}
                   a.cd_grupo_servico
                 , c.cd_tipo_grupo_servico
                 , a.cd_tipo_evento
@@ -88,7 +89,6 @@ class RptCashflow(RptAbstract):
                 , COALESCE(estudo_original.cd_status, estudo.cd_status) as cd_status
                 , COALESCE(a.cd_connector, 0)
                 , b.cdempreend
-                {group_by}
             FROM tb_ev_estudo_evento a
             INNER JOIN tb_cenarioorcamentoempreendiqa b
                 ON COALESCE(a.id_estudo_fluxo, a.id_estudo) = b.idEstudo
@@ -124,29 +124,28 @@ class RptCashflow(RptAbstract):
         qt_cols = 9
         
         for row in result:
+            
+            col = -1
+            
             crosstab_key = None
             keys = []
             
-            cd_grupo_servico = int(row[0])
-            cd_tipo_grupo_servico = int(row[1])
-            cd_tipo_evento = int(row[2])
-            cd_ano_mes = int(row[3])
-            vl_evento_spe = float(row[4])
-            vl_sinal_fluxo = int(row[5])
-            pc_participacao = float(row[6])
-            cd_status = int(row[7])
-            cd_connector = int(row[8])
-            cd_empreend = row[9]
-            
-            known_cols = 9
-            
-            qt_cols = qt_keys + known_cols
-            
-            for index in range(known_cols, qt_cols):
-                keys.append(row[index])
+            for index in range(0, qt_keys):
+                keys.append(row[col := col + 1])
                 
             if context.crosstab_generator:
-                crosstab_key = row[qt_cols + 1]
+                crosstab_key = row[col := col + 1]
+            
+            cd_grupo_servico = int(row[col := col + 1])
+            cd_tipo_grupo_servico = int(row[col := col + 1])
+            cd_tipo_evento = int(row[col := col + 1])
+            cd_ano_mes = int(row[col := col + 1])
+            vl_evento_spe = float(row[col := col + 1])
+            vl_sinal_fluxo = int(row[col := col + 1])
+            pc_participacao = float(row[col := col + 1])
+            cd_status = int(row[col := col + 1])
+            cd_connector = int(row[col := col + 1])
+            cd_empreend = row[col := col + 1]
             
             if pc_participacao > 0:
                 pc_participacao = 1
